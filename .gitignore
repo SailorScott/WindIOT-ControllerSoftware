@@ -1,3 +1,7 @@
+Target/*
+.vscode/*
+lib/*
+
 # Prerequisites
 *.d
 
