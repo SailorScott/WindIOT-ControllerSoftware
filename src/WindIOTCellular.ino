@@ -12,7 +12,7 @@
 // Contains sensor reading code, storage and formating for off boarding.
 #include "WindIOT_Temps.h"
 #include "WindIOT_Wind.h"
-
+#include "WindIOT_Pressure_Wave.h"
 SerialLogHandler logHandler;
 
 // --------------------------------------------------------------------------------------------
@@ -21,14 +21,22 @@ int led1 = D7; // Onboard Blue LED
 
 // --------------------------------------------------------------------------------------------
 // Software Timers
-Timer timerWindMeasurement(10 * 1000, fnWindMeasurement);         // every 10 seconds get wind speed and direction
-Timer timerTempMeasurement(20 * 60 * 1000, fnTempMeasurement);     //20*60*1000 // every 20 minutes make temperature measurments
-Timer timerOffboardData(20 * 60 * 1000, fnOffBoardData);           // every 20 minutes turn on comms and publish data
+Timer timerWindMeasurement(10 * 1000, fnWindMeasurement);      // every 10 seconds get wind speed and direction
+Timer timerTempMeasurement(20 * 60 * 1000, fnTempMeasurement); // 20*60*1000 // every 20 minutes make temperature measurments
+
+Timer timerWaveDelayStart(8 * 60 * 1000, fnWaveDelayStart, true);         // Start after 8 minutes
+Timer timerWaveStartMeasurements(10 * 60 * 1000, fnWaveStartMeasurements); // every 10 minutes start taking samples.
+Timer timerWavePressureMeasurement(200, fnWavePressureMeasurement);       // pressure sample when enabled
+
+Timer timerOffboardData(20 * 60 * 1000, fnOffBoardData);          // every 20 minutes turn on comms and publish data
 Timer timerOneTimeTurnOffComms(150 * 1000, fnTurnOffComms, true); // After first 2.5 minutes after start, turn off comms to save battery. should have time update
-Timer timerCheckBattery(20 * 60 * 1000, fnCheckBattery);           //20*60*1000 // every 20 minutes read SOC
+Timer timerCheckBattery(20 * 60 * 1000, fnCheckBattery);          // 20*60*1000 // every 20 minutes read SOC
 
 bool doWindMeasurement = false;
 bool doTempMeasurement = false;
+bool doWavePressureMeasurement = false;
+bool doneReadingWave = false;
+bool doWaveAnalysisAndStore = false;
 bool doTurnOnRadio = false;
 bool doOffBoardData = false;
 
@@ -41,6 +49,7 @@ retained int countAngleFail = 0;
 retained int countTempWaterFail = 0;
 retained int countTempAirFail = 0;
 retained int countTempBoxFail = 0;
+retained int countPressureFail = 0;
 
 #define EEPROMRESETCOUNT 0 // Memory address for tracking resets. Also copied into wind and temps as needed.
 #define TRYREADCOMPASS 1
@@ -48,6 +57,7 @@ retained int countTempBoxFail = 0;
 #define TRYREADTEMPWATER 3
 #define TRYREADTEMPAIR 4
 #define TRYREADTEMPBOX 5
+#define TRYREADPRESSURE 6
 #define TRYREADALLWORK 10
 
 retained int lastTryRead = TRYREADALLWORK; // Varialble to keep track of what sensor was read last.
@@ -115,11 +125,16 @@ void setup()
 
   // hall effect switch ones per rotation of cups
   attachInterrupt(A0, countOneSpin, RISING);
+
+  // Setup the BMP390 pressure setting config
+  setupPressureSensor();
+
   // current time for start of counting.
   TimeAtWindStartCounting = millis();
 
   timerTempMeasurement.start();
   timerWindMeasurement.start();
+  timerWaveDelayStart.start();
   timerOneTimeTurnOffComms.start();
   delay(1000); // let the measurements finish.
   timerOffboardData.start();
@@ -154,7 +169,28 @@ void loop()
   if (doWindMeasurement)
   {
     doWindMeasurement = false;
-    readWindIntoArray(((countAngleFail + countCompassFail) < 4)); // pass in if we failed. 
+    readWindIntoArray(((countAngleFail + countCompassFail) < 4)); // pass in if we failed.
+  }
+
+  if (doWavePressureMeasurement)
+  {
+    doWavePressureMeasurement = false;
+    if (countPressureFail < 4) // if less then 4 failures make a measurement.
+      doneReadingWave = WriteSinglePressureIntoArray();
+
+      if (doneReadingWave) {
+        Log.info("Done Reading Wave!!!!");
+        timerWavePressureMeasurement.stop();
+        doWindMeasurement = false;
+        // flag to do analysis.
+        doWaveAnalysisAndStore = true;
+      }
+  }
+
+  if (doWaveAnalysisAndStore)
+  {
+      doWaveAnalysisAndStore = false;
+      waveAnalysisAndStore(1); // loop through and find average, peaks
   }
 
   if (doTurnOnRadio)
@@ -280,6 +316,22 @@ void fnWindMeasurement()
 {
   doWindMeasurement = true;
 }
+// ***** Pressures and wave timers **********
+// after a delay, we start measureing wavesets very 20 minutes. A wave set is sampled every 0.2 seconds.
+void fnWavePressureMeasurement() // a single measurement every 0.2 seconds
+{
+  doWavePressureMeasurement = true;
+}
+
+void fnWaveDelayStart() // one time
+{
+  timerWaveStartMeasurements.start();
+}
+void fnWaveStartMeasurements() // every 20 min start a series of measurements.
+{
+  timerWavePressureMeasurement.start(); 
+}
+// ***************
 void fnTurnOffComms()
 {
   flagCanTurnOffComms = true;
@@ -311,6 +363,8 @@ void PublishData()
 
     String windData = WindDataJson(lastSuccessfulPublish);
 
+    String pressData = PressureWaveJson(lastSuccessfulPublish);
+
     String batteryStats = readBatterySystemStats();
 
     attempt2Publish = Time.now();
@@ -318,6 +372,8 @@ void PublishData()
     Particle.publish("BatteryStats", batteryStats, PRIVATE);
 
     Particle.publish("WindMPH", windData, PRIVATE); // assuming if one works, both work. Plus wind more important
+
+    Particle.publish("PressWave", pressData, PRIVATE); 
 
     successfulPublish = Particle.publish("TempC", temps, PRIVATE);
 
@@ -339,8 +395,8 @@ String readBatterySystemStats()
   EEPROM.get(EEPROMRESETCOUNT, resets);
 
   // fuel.getAlert() returns a 0 or 1 (0=alert not triggered)
-  String data = String::format("{\"site\":\"PYC\",\"Time\":%lu,\"SOC\":%3.1f,\"ResetsCntr\":%u,\"AngleFail\":%u,\"CompassFail\":%u,\"TempAirFail\":%u,\"TempWaterFail\":%u, \"TempBoxFail\":%u}",
-                               Time.now(), batterySOC, resets, countAngleFail, countCompassFail, countTempAirFail, countTempWaterFail, countTempBoxFail);
+ String data = String::format("{\"site\":\"PYC\",\"Time\":%lu,\"SOC\":%3.1f,\"ResetsCntr\":%u,\"AngleFail\":%u,\"CompassFail\":%u,\"TempAirFail\":%u,\"TempWaterFail\":%u, \"TempBoxFail\":%u, \"PressureFail\":%u}",
+                               Time.now(), batterySOC, resets, countAngleFail, countCompassFail, countTempAirFail, countTempWaterFail, countTempBoxFail, countPressureFail);
 
   return data;
 }
@@ -381,6 +437,10 @@ void watchdogHandler()
 
   case TRYREADTEMPBOX:
     countTempBoxFail = countTempBoxFail + 1;
+    break;
+
+  case TRYREADPRESSURE:
+    countPressureFail = countPressureFail + 1;
     break;
   }
 

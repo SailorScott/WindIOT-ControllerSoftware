@@ -58,7 +58,7 @@ float CalcWindDirection(int, int);
 
 void readWindIntoArray(bool notSkipDirection)
 {
-  Log.info("Do Wind");
+ // Log.info("Do Wind");
   // read the 3 sensors and store in array.
   ReadWind(indexArrayWindRaw, notSkipDirection);
 
@@ -212,12 +212,12 @@ void ReadWind(int index, bool notSkipDirection)
   countRotations = 0;
 
   // TESTING
-  Log.info("{\"Elsp\":%u,\"Cnt\":%u,\"Comp\":%u,\"Ang\":%u,\"calcWind\":%3.0f}",
-           arrayWindRaw[index][colElapsedTime],
-           arrayWindRaw[index][colPulseCount],
-           arrayWindRaw[index][colCompass],
-           arrayWindRaw[index][colWindDirection],
-           CalcWindDirection(CompassHeading, angle));
+  // Log.info("{\"Elsp\":%u,\"Cnt\":%u,\"Comp\":%u,\"Ang\":%u,\"calcWind\":%3.0f}",
+  //          arrayWindRaw[index][colElapsedTime],
+  //          arrayWindRaw[index][colPulseCount],
+  //          arrayWindRaw[index][colCompass],
+  //          arrayWindRaw[index][colWindDirection],
+  //          CalcWindDirection(CompassHeading, angle));
 }
 
 /*******************************************************************************************/
