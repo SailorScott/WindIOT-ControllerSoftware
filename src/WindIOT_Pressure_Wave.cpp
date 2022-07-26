@@ -30,7 +30,7 @@ extern retained int lastTryRead;
 unsigned int arrayPressureWave[PressureWaveArraySize][6]; // save summarized data for sending to server.
 int indexarrayPressureWave = 0;
 
-float arrayWaveSetPressureSamples[WaveSetPressureSamplesArraySize];
+float arrayWaveSetPressureSamples[WaveSetPressureSamplesArraySize]; // all the raw pressure readings.
 int indexArrayWaveSetPressureSamples = 0;
 
 float arrayWaveHeightsSamples[WaveHeightsArraySize];
@@ -52,7 +52,7 @@ bool setupPressureSensor()
   bool foundI2C = false;
 
   Log.info("Start BMP config");
-
+  lastTryRead = TRYREADPRESSURE;
   foundI2C = bmp.begin_I2C();
   if (!foundI2C)
   { // hardware I2C mode, can pass in address & alt Wire
@@ -69,6 +69,7 @@ bool setupPressureSensor()
 
     Log.info("Done BMP config");
   }
+    lastTryRead = TRYREADALLWORK;
   return foundI2C;
 }
 /*******************************************************************************************/
